@@ -1,0 +1,71 @@
+version: "3"
+
+services:
+  postgres:
+    image: postgres:12-alpine
+    container_name: coordinator_db
+    expose:
+      - 5432
+    volumes:
+      - .data/postgres:/var/lib/postgresql/data
+    environment:
+      POSTGRES_PASSWORD: pos_8_Tgres # replace with you own password
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  coordinator-service:
+    image: onfinality/subql-coordinator:v0.3.11
+    container_name: coordinator_service
+    ports:
+      - 8000:8000
+    depends_on:
+      "postgres":
+        condition: service_healthy
+    restart: always
+    volumes:
+      - /var/tmp/composeFiles:/var/tmp/composeFiles
+      - /var/run/docker.sock:/var/run/docker.sock
+    command:
+      - --network=testnet
+      - --ws-endpoint=wss://acala-mandala-adapter.api.onfinality.io/public-ws
+      - --postgres-host=postgres
+      - --postgres-password=pos_8_Tgres      # use the same password in the db config
+      - --postgres-port=5432
+      - --port=8000
+      - --debug
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "-i",
+          "-X POST",
+          "http://coordinator-service:8000/graphql",
+          "-H 'Content-Type: application/json'",
+          "-d '{ \"query\": \"query { accountMetadata { network } }\" }'"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+  proxy-server:
+    image: onfinality/subql-indexer-proxy:v0.2.0
+    container_name: coordinator_proxy
+    ports:
+      - 80:80
+    depends_on:
+      "coordinator-service":
+        condition: service_healthy
+    restart: always
+    command:
+      - --port=80
+      - --host=0.0.0.0
+      - --auth
+      - --token-duration=8 # query auth token validity [hours]
+      - --secret-key=qmbyd5hwac2jdcu
+      - --service-url=http://coordinator-service:8000/graphql
+networks:
+  default:
+    name: coordinator-service
